@@ -1,0 +1,1 @@
+venv/ pycache/ *.pyc *.pyo *.pyd .env .DS_Store *.log
