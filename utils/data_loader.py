@@ -1,13 +1,19 @@
 import pandas as pd
-import streamlit as st
 
 def load_data(file):
     """
-    Загружает CSV файл и возвращает DataFrame.
+    Загружает данные из CSV файла и проверяет наличие пропусков.
+    Возвращает DataFrame и словарь с информацией о пропусках.
     """
     try:
         df = pd.read_csv(file)
-        return df
+        missing_info = {
+            "total_missing": df.isnull().sum().sum(),
+            "numeric_cols": df.select_dtypes(include=['number']).columns.tolist(),
+            "categorical_cols": df.select_dtypes(include=['object', 'category']).columns.tolist(),
+            "missing_per_col": df.isnull().sum().to_dict()
+        }
+        return df, missing_info
     except Exception as e:
-        st.error(f"Ошибка при загрузке файла: {e}")
-        return None
+        print(f"Ошибка при загрузке данных: {e}")
+        return None, None

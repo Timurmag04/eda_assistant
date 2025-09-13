@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
 from utils.data_loader import load_data
-from utils.stats import get_basic_stats, get_correlations
-from utils.filters import filter_data
-from visualizations.plots import plot_histogram
+from utils.stats import get_extended_stats, detect_outliers, get_correlations
+from visualizations.plots import plot_histogram, plot_boxplot, plot_scatter, plot_line, plot_bar
 from components.custom_metrics import compute_custom_metric
 
 # Настройка страницы
@@ -21,6 +20,8 @@ if "history" not in st.session_state:
     st.session_state.current_step = -1
 if "filters_applied" not in st.session_state:
     st.session_state.filters_applied = False
+if "prev_stats" not in st.session_state:
+    st.session_state['prev_stats'] = None
 
 # --- Функции истории изменений ---
 def save_state(df):
@@ -79,10 +80,52 @@ def reset_filters():
         st.success("Все фильтры сброшены, возвращена исходная таблица.")
         st.rerun()
 
+def handle_missing_values(df, missing_info):
+    # Проверяем наличие пропусков
+    total_missing = missing_info["total_missing"]
+    if total_missing == 0:
+        return df
+
+    st.warning(f"Обнаружено {total_missing} пропусков в датасете. Настройте обработку ниже.")
+    
+    # Разделяем столбцы на числовые и категориальные
+    numeric_cols = missing_info["numeric_cols"]
+    categorical_cols = missing_info["categorical_cols"]
+
+    # Обработка для числовых столбцов
+    if numeric_cols:
+        with st.expander("Обработка пропусков в числовых столбцах", expanded=True):
+            st.write(f"Числовые столбцы: {', '.join(numeric_cols)}")
+            numeric_action = st.selectbox("Действие для числовых пропусков", 
+                                        ["Удалить строки с пропусками", "Оставить пропуски", 
+                                         "Заменить на среднее", "Заменить на медиану", "Заменить на моду"])
+            
+            if numeric_action == "Удалить строки с пропусками":
+                df = df.dropna(subset=numeric_cols)
+            elif numeric_action == "Заменить на среднее":
+                df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].mean())
+            elif numeric_action == "Заменить на медиану":
+                df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
+            elif numeric_action == "Заменить на моду":
+                df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].mode().iloc[0])
+
+    # Обработка для категориальных столбцов
+    if categorical_cols:
+        with st.expander("Обработка пропусков в категориальных столбцах", expanded=True):
+            st.write(f"Категориальные столбцы: {', '.join(categorical_cols)}")
+            categorical_action = st.selectbox("Действие для категориальных пропусков", 
+                                            ["Оставить пропуски", "Удалить строки с пропусками"])
+            
+            if categorical_action == "Удалить строки с пропусками":
+                df = df.dropna(subset=categorical_cols)
+
+    st.success("Обработка пропусков завершена.")
+    return df
+
 # --- Главное меню ---
 menu = st.sidebar.radio(
     "Меню",
-    ["📊 Таблица", "📈 Статистика", "🔗 Корреляции", "📉 Гистограммы", "🧮 Кастомные метрики", "📂 Загрузка данных"]
+    ["📊 Таблица", "📈 Статистика", "📊 Визуализация", "🧮 Кастомные метрики", "📂 Загрузка данных"]
 )
 
 # --- Загрузка данных ---
@@ -90,14 +133,17 @@ if menu == "📂 Загрузка данных":
     st.header("Загрузка данных")
     uploaded_file = st.file_uploader("Загрузите CSV файл", type=["csv"])
     if uploaded_file is not None:
-        df = load_data(uploaded_file)
+        df, missing_info = load_data(uploaded_file)
         if df is not None:
+            # Проверяем и обрабатываем пропуски
+            df = handle_missing_values(df, missing_info)
             st.session_state['df'] = df.copy()
             st.session_state['original_df'] = df.copy()  # Исходная таблица
             st.session_state.history = [df.copy()]
             st.session_state.current_step = 0
             st.session_state.filters_applied = False
-            st.success("Файл загружен и сохранён в сессии.")
+            st.session_state['prev_stats'] = None  # Сброс предыдущей статистики
+            st.success("Файл загружен и обработан (пропуски устранены).")
 
 # --- Работа с таблицей ---
 elif st.session_state['df'] is not None:
@@ -206,18 +252,133 @@ elif st.session_state['df'] is not None:
 
     elif menu == "📈 Статистика":
         st.header("Описательная статистика")
-        st.write(get_basic_stats(df))
+        
+        # Выбор столбцов для анализа
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        selected_cols = st.multiselect("Выберите столбцы для анализа", numeric_cols, default=numeric_cols)
+        
+        # Фильтр для статистики
+        col1, col2 = st.columns(2)
+        with col1:
+            filter_col = st.selectbox("Фильтровать по столбцу", ["Нет"] + df.columns.tolist())
+        with col2:
+            filter_value = st.number_input("Значение фильтра", value=None, key="filter_value") if filter_col != "Нет" and pd.api.types.is_numeric_dtype(df[filter_col]) else None
+        
+        # Применение фильтра
+        filtered_df = df.copy()
+        if filter_col != "Нет" and filter_value is not None:
+            filtered_df = filtered_df[filtered_df[filter_col] >= filter_value]
+        
+        # Расширенная статистика
+        if selected_cols:
+            stats_df = get_extended_stats(filtered_df, selected_cols)
+            # Применяем форматирование только к числовым столбцам, исключая 'Столбец'
+            numeric_cols_in_stats = [col for col in stats_df.columns if col != 'Столбец']
+            styled_df = stats_df.style.format({col: "{:.2f}" for col in numeric_cols_in_stats}).background_gradient(cmap='Blues')
+            st.dataframe(styled_df)
+        
+            # Визуализация (Boxplot)
+            fig = plot_boxplot(filtered_df, selected_cols)
+            st.plotly_chart(fig, use_container_width=True)
+        
+            # Обнаружение аномалий (только количество)
+            outliers = detect_outliers(filtered_df, selected_cols)
+            if any(outliers.values()):
+                st.subheader("Количество выбросов")
+                for col, indices in outliers.items():
+                    if indices:
+                        count = len(indices)
+                        st.write(f"Столбец {col}: {count} выбросов")
+        
+            # Heatmap корреляций
+            corr = get_correlations(filtered_df)
+            if corr is not None and len(corr.columns) > 1:
+                st.subheader("Тепловая карта корреляций")
+                fig = px.imshow(corr, text_auto=True, aspect="auto", color_continuous_scale='RdBu_r')
+                fig.update_layout(title="Корреляционная матрица")
+                st.plotly_chart(fig, use_container_width=True)
+        
+        # Сравнение с предыдущим состоянием
+        if st.session_state['prev_stats'] is not None and selected_cols:
+            st.subheader("Сравнение с предыдущим состоянием")
+            prev_stats_df = st.session_state['prev_stats'][st.session_state['prev_stats']['Столбец'].isin(selected_cols)]
+            diff_df = pd.merge(stats_df, prev_stats_df, on="Столбец", suffixes=('_new', '_old'))
+            diff_df['Разница (Среднее)'] = diff_df['Среднее_new'] - diff_df['Среднее_old']
+            styled_diff = diff_df.style.format({col: "{:.2f}" for col in diff_df.columns if col != 'Столбец'}).background_gradient(cmap='RdYlGn', subset=['Разница (Среднее)'])
+            st.dataframe(styled_diff)
+        
+        # Кастомные метрики
+        custom_formula = st.text_area("Введите кастомную формулу (например, df['age'] * 2)", 
+                                    placeholder="Пример: df['age'] * 2 или df['salary'] / 1000")
+        if st.button("Вычислить кастомную метрику"):
+            if custom_formula and selected_cols:
+                try:
+                    custom_df = filtered_df.copy()
+                    custom_df['Custom'] = eval(custom_formula)
+                    custom_stats = get_extended_stats(custom_df, ['Custom'])
+                    styled_custom = custom_stats.style.format({col: "{:.2f}" for col in custom_stats.columns if col != 'Столбец'})
+                    st.write("Статистика кастомной метрики:")
+                    st.dataframe(styled_custom)
+                except Exception as e:
+                    st.error(f"Ошибка в формуле: {e}")
 
-    elif menu == "🔗 Корреляции":
-        st.header("Корреляционная матрица")
-        corr = get_correlations(df, method="pearson")
-        if corr is not None:
-            st.write(corr)
+        # Сохранение текущей статистики
+        if st.button("Сохранить текущее состояние статистики"):
+            st.session_state['prev_stats'] = get_extended_stats(df, selected_cols)
+            st.success("Статистика сохранена.")
 
-    elif menu == "📉 Гистограммы":
-        st.header("Построение гистограммы")
-        column = st.selectbox("Выберите колонку", df.columns)
-        plot_histogram(df, column)
+    elif menu == "📊 Визуализация":
+        st.header("Визуализация данных")
+        
+        # Выбор типа визуализации
+        chart_types = ["Гистограмма", "Ящик с усами", "Точечная диаграмма", "Линейный график", "Столбчатая диаграмма"]
+        chart_type = st.selectbox("Выберите тип визуализации", chart_types)
+        
+        # Выбор столбцов
+        all_cols = df.columns.tolist()
+        if chart_type in ["Точечная диаграмма", "Линейный график"]:
+            x_col = st.selectbox("Выберите столбец для оси X", all_cols)
+            y_col = st.selectbox("Выберите столбец для оси Y", [col for col in all_cols if col != x_col])
+            selected_cols = [x_col, y_col]
+        else:
+            selected_cols = st.multiselect("Выберите столбцы для визуализации", all_cols, default=all_cols[0] if all_cols else None)
+        
+        # Фильтр для визуализации
+        col1, col2 = st.columns(2)
+        with col1:
+            filter_col = st.selectbox("Фильтровать по столбцу", ["Нет"] + df.columns.tolist())
+        with col2:
+            filter_value = st.number_input("Значение фильтра", value=None, key="viz_filter_value") if filter_col != "Нет" and pd.api.types.is_numeric_dtype(df[filter_col]) else None
+        
+        # Применение фильтра
+        viz_df = df.copy()
+        if filter_col != "Нет" and filter_value is not None:
+            viz_df = viz_df[viz_df[filter_col] >= filter_value]
+        
+        # Настройки
+        bins = st.slider("Количество бинов (для гистограммы)", 10, 50, 30) if chart_type == "Гистограмма" else None
+        color_col = st.selectbox("Цвет по столбцу (опционально)", ["Нет"] + all_cols) if chart_type in ["Гистограмма", "Точечная диаграмма", "Столбчатая диаграмма"] else None
+        
+        # Генерация графика
+        try:
+            if selected_cols and any(viz_df[col].notna().any() for col in selected_cols):
+                if chart_type == "Гистограмма":
+                    fig = plot_histogram(viz_df, selected_cols[0], nbins=bins, color_col=color_col if color_col != "Нет" else None)
+                elif chart_type == "Ящик с усами":
+                    fig = plot_boxplot(viz_df, selected_cols)
+                elif chart_type == "Точечная диаграмма":
+                        fig = plot_scatter(viz_df, x_col, y_col, color_col=color_col if color_col != "Нет" else None)
+                elif chart_type == "Линейный график":
+                    fig = plot_line(viz_df, x_col, y_col)
+                elif chart_type == "Столбчатая диаграмма":
+                    fig = plot_bar(viz_df, selected_cols[0], color_col=color_col if color_col != "Нет" else None)
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("Выберите хотя бы один столбец с данными.")
+        except:
+            st.write("Недопустимые данные")
+
 
     elif menu == "🧮 Кастомные метрики":
         st.header("Кастомные метрики")
