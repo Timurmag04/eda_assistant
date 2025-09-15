@@ -3,7 +3,7 @@ import pandas as pd
 from utils.data_loader import load_data
 from utils.stats import get_extended_stats, detect_outliers, get_correlations
 from visualizations.plots import plot_histogram, plot_boxplot, plot_scatter, plot_line, plot_bar
-from components.custom_metrics import compute_custom_metric
+from components.custom_metrics import compute_custom_metric, export_result
 
 # Настройка страницы
 st.set_page_config(page_title="EDA Assistant", layout="wide")
@@ -22,6 +22,8 @@ if "filters_applied" not in st.session_state:
     st.session_state.filters_applied = False
 if "prev_stats" not in st.session_state:
     st.session_state['prev_stats'] = None
+if "user_result" not in st.session_state:
+    st.session_state['user_result'] = None
 
 # --- Функции истории изменений ---
 def save_state(df):
@@ -125,7 +127,7 @@ def handle_missing_values(df, missing_info):
 # --- Главное меню ---
 menu = st.sidebar.radio(
     "Меню",
-    ["📊 Таблица", "📈 Статистика", "📊 Визуализация", "🧮 Кастомные метрики", "📂 Загрузка данных"]
+    ["📊 Таблица", "📈 Статистика", "📊 Визуализация", "🧮 Пользовательские выражения", "📂 Загрузка данных"]
 )
 
 # --- Загрузка данных ---
@@ -143,6 +145,7 @@ if menu == "📂 Загрузка данных":
             st.session_state.current_step = 0
             st.session_state.filters_applied = False
             st.session_state['prev_stats'] = None  # Сброс предыдущей статистики
+            st.session_state['user_result'] = None  # Сброс пользовательского результата
             st.success("Файл загружен и обработан (пропуски устранены).")
 
 # --- Работа с таблицей ---
@@ -307,21 +310,6 @@ elif st.session_state['df'] is not None:
             styled_diff = diff_df.style.format({col: "{:.2f}" for col in diff_df.columns if col != 'Столбец'}).background_gradient(cmap='RdYlGn', subset=['Разница (Среднее)'])
             st.dataframe(styled_diff)
         
-        # Кастомные метрики
-        custom_formula = st.text_area("Введите кастомную формулу (например, df['age'] * 2)", 
-                                    placeholder="Пример: df['age'] * 2 или df['salary'] / 1000")
-        if st.button("Вычислить кастомную метрику"):
-            if custom_formula and selected_cols:
-                try:
-                    custom_df = filtered_df.copy()
-                    custom_df['Custom'] = eval(custom_formula)
-                    custom_stats = get_extended_stats(custom_df, ['Custom'])
-                    styled_custom = custom_stats.style.format({col: "{:.2f}" for col in custom_stats.columns if col != 'Столбец'})
-                    st.write("Статистика кастомной метрики:")
-                    st.dataframe(styled_custom)
-                except Exception as e:
-                    st.error(f"Ошибка в формуле: {e}")
-
         # Сохранение текущей статистики
         if st.button("Сохранить текущее состояние статистики"):
             st.session_state['prev_stats'] = get_extended_stats(df, selected_cols)
@@ -360,40 +348,71 @@ elif st.session_state['df'] is not None:
         color_col = st.selectbox("Цвет по столбцу (опционально)", ["Нет"] + all_cols) if chart_type in ["Гистограмма", "Точечная диаграмма", "Столбчатая диаграмма"] else None
         
         # Генерация графика
-        try:
-            if selected_cols and any(viz_df[col].notna().any() for col in selected_cols):
-                if chart_type == "Гистограмма":
-                    fig = plot_histogram(viz_df, selected_cols[0], nbins=bins, color_col=color_col if color_col != "Нет" else None)
-                elif chart_type == "Ящик с усами":
-                    fig = plot_boxplot(viz_df, selected_cols)
-                elif chart_type == "Точечная диаграмма":
-                        fig = plot_scatter(viz_df, x_col, y_col, color_col=color_col if color_col != "Нет" else None)
-                elif chart_type == "Линейный график":
-                    fig = plot_line(viz_df, x_col, y_col)
-                elif chart_type == "Столбчатая диаграмма":
-                    fig = plot_bar(viz_df, selected_cols[0], color_col=color_col if color_col != "Нет" else None)
-                
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning("Выберите хотя бы один столбец с данными.")
-        except:
-            st.write("Недопустимые данные")
+        if selected_cols and any(viz_df[col].notna().any() for col in selected_cols):
+            if chart_type == "Гистограмма":
+                fig = plot_histogram(viz_df, selected_cols[0], nbins=bins, color_col=color_col if color_col != "Нет" else None)
+            elif chart_type == "Ящик с усами":
+                fig = plot_boxplot(viz_df, selected_cols)
+            elif chart_type == "Точечная диаграмма":
+                fig = plot_scatter(viz_df, x_col, y_col, color_col=color_col if color_col != "Нет" else None)
+            elif chart_type == "Линейный график":
+                fig = plot_line(viz_df, x_col, y_col)
+            elif chart_type == "Столбчатая диаграмма":
+                fig = plot_bar(viz_df, selected_cols[0], color_col=color_col if color_col != "Нет" else None)
+            
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Выберите хотя бы один столбец с данными.")
 
-
-    elif menu == "🧮 Кастомные метрики":
-        st.header("Кастомные метрики")
-        formula = st.text_area(
-            "Введите формулу (например, df['age'] * 2)",
-            placeholder="Пример: df['age'] * 2 или df['salary'] / 1000"
-        )
-        if st.button("Вычислить"):
-            if formula:
-                result = compute_custom_metric(df, formula)
-                if result is not None:
-                    st.write("Результат вычисления:")
-                    st.write(result)
+    elif menu == "🧮 Пользовательские выражения":
+        st.header("Пользовательские выражения")
+        st.write("Введите любой код Python. Доступен объект `df` (если загружен). Установите результат в переменную `result` для отображения. Сохраненный результат можно экспортировать.")
+        
+        # Поле для ввода кода
+        code = st.code("""
+# Примеры:
+# 1. Простой расчет: result = 2 + 3
+# 2. Работа с датасетом: result = df['age'] * 2
+# 3. Сложный код: 
+#    total = 0
+#    for i in range(10):
+#        total += i
+#    result = total
+# 4. Новый DataFrame: result = df.assign(new_col = df['salary'] / 1000)
+""", language="python")
+        user_code = st.text_area("Ваш код", height=200)
+        
+        # Кнопка для выполнения
+        if st.button("Выполнить"):
+            if user_code:
+                result = compute_custom_metric(st.session_state['df'], user_code)
+                if isinstance(result, str) and "Ошибка" in result:
+                    st.error(result)
+                else:
+                    st.session_state['user_result'] = result
+                    if isinstance(result, (pd.DataFrame, pd.Series)):
+                        st.write("Результат:")
+                        st.dataframe(result)
+                    else:
+                        st.write("Результат:", result)
             else:
-                st.warning("Введите формулу для вычисления.")
+                st.warning("Введите код для выполнения.")
+
+        # Отображение и экспорт сохраненного результата
+        if st.session_state['user_result'] is not None:
+            st.write("Сохраненный результат:")
+            if isinstance(st.session_state['user_result'], (pd.DataFrame, pd.Series)):
+                st.dataframe(st.session_state['user_result'])
+            else:
+                st.write(st.session_state['user_result'])
+            
+            data, filename, mime = export_result(st.session_state['user_result'])
+            st.download_button(
+                label="Скачать результат",
+                data=data,
+                file_name=filename,
+                mime=mime
+            )
 
     # --- Кнопка скачать данные ---
     st.download_button(
