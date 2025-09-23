@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 from utils.data_loader import load_data
 from utils.stats import get_extended_stats, detect_outliers, get_correlations
 from visualizations.plots import plot_histogram, plot_boxplot, plot_scatter, plot_line, plot_bar
@@ -127,7 +128,7 @@ def handle_missing_values(df, missing_info):
 # --- Главное меню ---
 menu = st.sidebar.radio(
     "Меню",
-    ["📊 Таблица", "📈 Статистика", "📊 Визуализация", "🧮 Пользовательские выражения", "📂 Загрузка данных"]
+    ["📊 Таблица", "📈 Статистика", "📊 Визуализация", "🧮 Пользовательские выражения", "📂 Загрузка данных", "📉 Сводная таблица"]
 )
 
 # --- Загрузка данных ---
@@ -413,6 +414,37 @@ elif st.session_state['df'] is not None:
                 file_name=filename,
                 mime=mime
             )
+
+    elif menu == "📉 Сводная таблица":
+        st.header("Сводная таблица")
+        st.write("Создайте сводную таблицу, как в Excel, выбрав индексы, столбцы, значения и функцию агрегации.")
+
+        # Выбор параметров для сводной таблицы
+        all_cols = df.columns.tolist()
+        index_cols = st.multiselect("Столбцы для индексов", all_cols, default=all_cols[0] if all_cols else None)
+        columns_cols = st.multiselect("Столбцы для заголовков", [col for col in all_cols if col not in index_cols], default=None)
+        values_cols = st.multiselect("Столбцы для значений", [col for col in all_cols if col not in index_cols + columns_cols], default=None)
+        agg_functions = ["mean", "sum", "count", "min", "max"]
+        aggfunc = st.selectbox("Функция агрегации", agg_functions, index=0, key="aggfunc")
+
+        # Проверка входных данных
+        if index_cols and values_cols:
+            pivot_result = build_pivot_table(df, index_cols, columns_cols, values_cols, aggfunc)
+            
+            if isinstance(pivot_result, str):
+                st.error(pivot_result)
+            else:
+                st.dataframe(pivot_result)
+                # Добавляем возможность экспорта
+                data = pivot_result.to_csv(index=True).encode('utf-8')
+                st.download_button(
+                    label="Скачать сводную таблицу",
+                    data=data,
+                    file_name="pivot_table.csv",
+                    mime="text/csv"
+                )
+        else:
+            st.warning("Выберите хотя бы один столбец для индексов и значений.")
 
     # --- Кнопка скачать данные ---
     st.download_button(
